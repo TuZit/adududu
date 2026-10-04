@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(for:*)",
+      "Shell(do:*)",
+      "Shell(command:*)",
+      "Shell(echo:*)",
+      "Shell(done:*)",
+      "Shell(git:*)",
+      "Shell(for t in pipx pip3 pip npx node brew; do printf '%-8s ' \"$t\"; command -v \"$t\" >/dev/null 2>&1 && command -v \"$t\" || echo \"(missing)\"; done; echo \"node: $(node -v 2>/dev/null)\")",
+      "Shell(SP=/private/tmp/commandcode-501/-Users-papadracula141gmail-com-Desktop-pet-prj-review-perf/70c3af57-36a3-4b71-b4fc-74c9bacb2514/scratchpad SKILL=/Users/papadracula141gmail.com/Desktop/pet-prj/review-perf/.commandcode/skills/review-code-performance SB=\"$SP/refresh-test\" rm -rf \"$SB\" && mkdir -p \"$SB\" && cp -R \"$SKILL\" \"$SB/skill\" python3 - \"$SB/skill/references/performance-rule-list.md\" <<'PY' import sys, pathlib p = pathlib.Path(sys.argv[1]); t = p.read_text() row = (\"| [x] | PERF-JAVA-016 | File I/O stream creation that triggers finalization / GC pauses \" \"| direct | High | REF-JAVA-01 | AST/PMD | Cover FileInputStream/FileOutputStream/FileReader/FileWriter \" \"where java.nio Files.* avoids finalizer-driven GC pauses |\\n\") anchor = \"| [x] | PERF-JAVA-015 |\" i = t.index(anchor); j = t.index(\"\\n\", i) + 1 t = t[:j] + row + t[j:] t += \"\"\" ### PERF-JAVA-016 — File I/O stream creation triggers finalization / GC pauses ```yaml status: selected introduced_at: 2026-10-04 last_verified_at: 2026-10-04 source_ids: [REF-JAVA-01] source_locator: \"PMD Performance > AvoidFileStream\" source_version: \"pmd.github.io docs @ 2026-10-04\" performance_mechanism: \"FileInputStream/FileOutputStream (and FileReader/FileWriter) hold a finalizer; finalization causes GC pauses.\" detection: static: [constructor-call-to-FileInputStream/FileOutputStream/FileReader/FileWriter] contextual: [file size, call frequency, hot-path] false_positive: - code that explicitly depends on FileNotFoundException semantics golden_set: positive_case: \"new FileInputStream(fileName)\" negative_case: \"Files.newInputStream(Paths.get(fileName))\" edge_case: \"caller catches FileNotFoundException explicitly\" ``` \"\"\" p.write_text(t) print(\"appended candidate rule PERF-JAVA-016\") PY echo '--- added lines ---' diff <(cat \"$SKILL/references/performance-rule-list.md\") <(cat \"$SB/skill/references/performance-rule-list.md\") | head -40 echo '--- validator on refreshed COPY ---' python3 \"$SB/skill/scripts/validate_rule_registry.py\" echo '--- real skill still untouched ---' python3 \"$SKILL/scripts/validate_rule_registry.py\")",
+      "Shell(bash /Users/papadracula141gmail.com/Desktop/pet-prj/review-perf/.commandcode/skills/review-code-performance/scripts/run_all_performance.sh /Users/papadracula141gmail.com/Desktop/pet-prj/review-perf/quiz-master --tools pmd,spotbugs,semgrep,biome 2 >& 1)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

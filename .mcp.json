@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "fetch": {
+      "transport": "stdio",
+      "enabled": true,
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "ESLint": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["@eslint/mcp@latest"]
+    },
+    "sonarqube": {
+      "transport": "stdio",
+      "enabled": true,
+      "command": "podman",
+      "args": [
+        "run",
+        "--init",
+        "--pull=always",
+        "-i",
+        "--rm",
+        "-e",
+        "SONARQUBE_TOKEN",
+        "-e",
+        "SONARQUBE_URL",
+        "sonarsource/sonarqube-mcp"
+      ],
+      "env": {
+        "SONARQUBE_TOKEN": "squ_7ce6a145a2f5991f92b1af1abd27b5fe38e53e10",
+        "SONARQUBE_URL": "http://host.containers.internal:9000"
+      }
+    }
+  }
+}
