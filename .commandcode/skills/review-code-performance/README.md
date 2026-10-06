@@ -7,12 +7,17 @@ including Spring Boot / JPA / Hibernate where applicable.
 
 1. **Asks first** whether to refresh the rule sets from trusted sources (web or MCP fetch) or to
    review with the existing rules (see `SKILL.md` Section 0).
-2. Runs the free static analyzers through the scripts in `scripts/` (missing tools are skipped,
+2. **Resolves the scope deterministically** with `scripts/perf_scope.sh`: which files to review,
+   what is excluded (and why), and the exact PERF rules that apply to each file. No file is dropped
+   silently — every changed file ends up reviewed or excluded with a reason.
+3. Runs the free static analyzers through the scripts in `scripts/` (missing tools are skipped,
    never fatal).
-3. Applies the contextual `PERF-*` rules in `references/performance-rule-list.md`, with source
-   provenance and a separate confidence rating.
-4. Ends every run with one **report folder** per run: `<project>/.perf-reports/<run_id>/`
-   (`report.md` + `findings.json` + `meta.json` + tool evidence), linked from `.perf-reports/latest`.
+4. Applies the per-file contextual `PERF-*` rules in `references/performance-rule-list.md`, with a
+   **positioning pass** (exact `file:line`) and a **reflection pass**, plus source provenance and a
+   separate confidence rating.
+5. Ends every run with one **report folder** per run: `<project>/.perf-reports/<run_id>/`
+   (`scope.json` + `coverage.json` + `report.md` + `findings.json` + `meta.json` + tool evidence),
+   linked from `.perf-reports/latest`. The **coverage ledger** must close: no file left `pending`.
 
 ## Structure
 
@@ -23,8 +28,10 @@ review-code-performance/
 ├── references/
 │   ├── performance-source-registry.md   # trusted sources + fetch list
 │   ├── performance-rule-list.md         # living PERF rule registry (updated on refresh)
+│   ├── perf-path-rules.json             # glob → PERF rule families (per-file rule matching)
 │   └── licensing-enterprise.md          # enterprise licensing/legal evaluation
 └── scripts/
+    ├── perf_scope.sh                    # deterministic scope + per-file rules + coverage skeleton
     ├── run_all_performance.sh           # orchestrator: runs every available tool
     ├── run_pmd_performance.sh           # PMD  (Java, performance ruleset)
     ├── run_spotbugs_performance.sh      # SpotBugs (Java bytecode, PERFORMANCE category)
@@ -34,7 +41,7 @@ review-code-performance/
     ├── run_biome_performance.sh         # Biome (JS/TS/React)
     ├── container_engine.sh              # Docker → Podman runtime detection (sourced)
     ├── validate_rule_registry.py        # structural check of the rule/source registries
-    ├── perf_report.sh                   # per-run report folder: init / latest
+    ├── perf_report.sh                   # per-run report folder: init (reuse via PERF_RUN_DIR) / latest
     └── docker-compose.yml               # free SonarQube + Postgres stack
 ```
 
@@ -44,18 +51,36 @@ review-code-performance/
 
 1. Ask the rule-set gate question (Section 0).
 2. Read `SKILL.md`.
-3. Read `references/performance-source-registry.md`.
-4. Read `references/performance-rule-list.md`.
-5. Inspect the changed code.
-6. Run detection: SonarQube + ESLint via their MCP servers, then
-   `scripts/run_all_performance.sh` for the remaining scripts (PMD, SpotBugs, Semgrep, Biome).
-7. Refresh trusted references when the gate selected it (Section 8).
-8. Synthesize/contextualize missing rules and validate provenance.
-9. Append eligible rules to the dynamic registry.
-10. Produce findings with source provenance and confidence.
-11. Validate the registry with `scripts/validate_rule_registry.py`.
-12. Write the run report folder via `bash scripts/perf_report.sh init` and fill `report.md` +
-    `findings.json` (SKILL.md Step 9) — mandatory even with zero findings.
+3. **Run `scripts/perf_scope.sh preview`** → reviewable files, exclusions, per-file `rule_ids`,
+   `scope.json` + `coverage.json`. Capture `RUN_DIR` and `export PERF_RUN_DIR=<RUN_DIR>`.
+4. Read `references/performance-source-registry.md`.
+5. Read only the rules resolved for the changed files from `references/performance-rule-list.md`.
+6. Inspect the changed code.
+7. Run detection: SonarQube + ESLint via their MCP servers, then
+   `scripts/run_all_performance.sh` for the remaining scripts (PMD, SpotBugs, Semgrep, Biome) —
+   it reuses `PERF_RUN_DIR`, so the run keeps one `run_id`.
+8. Refresh trusted references when the gate selected it (Section 8).
+9. Synthesize/contextualize missing rules and validate provenance.
+10. Apply the **positioning pass** and the **reflection pass** to candidate findings.
+11. Produce findings with source provenance and confidence.
+12. Validate the registry with `scripts/validate_rule_registry.py`.
+13. **Close the coverage ledger** (no file left `pending`) and write the run report folder via
+    `bash scripts/perf_report.sh init` + fill `report.md`, `coverage.json`, `findings.json`
+    (SKILL.md Step 9) — mandatory even with zero findings.
+
+## Deterministic scope
+
+```bash
+bash scripts/perf_scope.sh preview . [--from main --to feature] [--commit abc123] \
+     [--exclude '**/generated/**,**/testdata/**'] [--format json|text]
+```
+
+- Prints scope JSON to stdout; `RUN_DIR=<path>` to stderr; writes `scope.json` + `coverage.json`.
+- Excludes build output, vendored, generated, lockfiles, snapshots, deleted files, non
+  Java/JS/React files (all with a reason), plus `--exclude` patterns and a project
+  `.perf-excludes` file (one pattern per line).
+- Resolves each file's PERF rules via `references/perf-path-rules.json` (glob → rule family;
+  Spring/JPA families attach only when a Spring project is detected).
 
 ## Free tooling
 

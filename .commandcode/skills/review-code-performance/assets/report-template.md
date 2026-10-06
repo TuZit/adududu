@@ -25,6 +25,29 @@
 | Medium | {{COUNT_MEDIUM}} |
 | Low | {{COUNT_LOW}} |
 
+## Scope
+
+| Field | Value |
+|---|---|
+| Mode | {{SCOPE_MODE}} |
+| Reviewable files (post-exclusion) | {{TOTAL_FILES}} |
+| Excluded by scope | see "Excluded (scope)" |
+
+## Coverage ledger
+
+| Metric | Value |
+|---|---|
+| Reviewable files | {{TOTAL_FILES}} |
+| Reviewed | {{REVIEWED_FILES}} |
+| Skipped (with reason) | {{SKIPPED_FILES}} |
+| Coverage rate | {{COVERAGE_RATE}} |
+
+<!-- One row per file in .perf-reports/<run_id>/coverage.json. No file may remain "pending". -->
+
+| File | Status | Reason |
+|---|---|---|
+| `path/to/file` | reviewed | — |
+
 ## Findings
 
 <!-- Repeat this block per finding, ordered by severity then confidence. -->
@@ -52,6 +75,13 @@
 <!-- Findings from tools that are style/correctness/security/a11y, not performance. -->
 
 - `path:line` — <tool> `<rule>` — <reason excluded>
+
+## Excluded (scope)
+
+<!-- Deterministic exclusions from perf_scope.sh: build output, vendored, generated,
+     non Java/JS/React, deleted, user exclude patterns. -->
+
+- `path` — <reason>
 
 ## Tool evidence
 

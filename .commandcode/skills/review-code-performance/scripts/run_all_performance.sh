@@ -34,8 +34,11 @@ done
 PROJECT_DIR="$(cd "$PROJECT_DIR" 2>/dev/null && pwd)" || { echo "STATUS: FAIL (bad project dir)"; exit 1; }
 
 # Create a fresh per-run report folder and route all tool evidence into it.
+# If PERF_RUN_DIR is set (e.g. exported from perf_scope.sh), reuse that run folder so the
+# whole invocation keeps one run_id; otherwise a new folder is created.
 RUN_DIR="$(bash "$SCRIPT_DIR/perf_report.sh" init "$PROJECT_DIR")" \
   || { echo "STATUS: FAIL (could not create run folder)"; exit 1; }
+export PERF_RUN_DIR="$RUN_DIR"
 export PERF_REPORT_DIR="$RUN_DIR"
 REPORT_DIR="$RUN_DIR"
 SUMMARY_TXT="$REPORT_DIR/summary.txt"
@@ -59,8 +62,8 @@ run_one() {
   NAMES+=("$name"); STATUSES+=("$status"); DETAILS+=("${detail:-no status line}")
 }
 
-IFS=',' read -r -a WANTED <<< "$TOOLS"
-for tool in "${WANTED[@]}"; do
+IFS=',' read -r -a WANTED <<< "$TOOLS" 2>/dev/null || WANTED=()
+for tool in ${WANTED[@]+"${WANTED[@]}"}; do
   tool="$(printf '%s' "$tool" | tr -d '[:space:]')"
   case "$tool" in
     pmd)      run_one "pmd"      "run_pmd_performance.sh" ;;
@@ -80,7 +83,7 @@ done
   echo "Container engine: ${CONTAINER_ENGINE:-none}"
   echo
   printf '%-12s %-6s %s\n' "TOOL" "STATUS" "DETAIL"
-  for i in "${!NAMES[@]}"; do
+  for i in ${!NAMES[@]+"${!NAMES[@]}"}; do
     printf '%-12s %-6s %s\n' "${NAMES[$i]}" "${STATUSES[$i]}" "${DETAILS[$i]}"
   done
 } | tee "$SUMMARY_TXT"
@@ -90,7 +93,7 @@ done
   echo "  \"project\": \"$PROJECT_DIR\","
   echo "  \"generated_at\": \"$(date '+%Y-%m-%dT%H:%M:%S')\","
   echo "  \"tools\": ["
-  for i in "${!NAMES[@]}"; do
+  for i in ${!NAMES[@]+"${!NAMES[@]}"}; do
     sep=","; [ "$i" -eq $(( ${#NAMES[@]} - 1 )) ] && sep=""
     detail="${DETAILS[$i]//\"/\\\"}"
     echo "    {\"name\": \"${NAMES[$i]}\", \"status\": \"${STATUSES[$i]}\", \"detail\": \"$detail\"}$sep"

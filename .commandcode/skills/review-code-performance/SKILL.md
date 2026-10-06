@@ -1,10 +1,10 @@
 ---
 name: review-code-performance
-description: Performance-focused code review for changed Java, Spring Boot/JPA/Hibernate, JavaScript and React code. On start it asks whether to refresh its PERF rule sets from trusted sources (web or MCP fetch), runs free static analyzers (PMD, SpotBugs, Semgrep, Biome via scripts; SonarQube and ESLint via MCP servers), then applies contextual rules to find N+1 queries, allocation/memory, render and bundle regressions, and blocking main-thread work. Use when asked to review a diff/PR/branch for performance risks, run performance linting, or update the PERF rule set.
-argument-hint: "<paths|diff|PR> [--refresh-rules] [--tools pmd,spotbugs,semgrep,sonarqube,biome,eslint] [--deep]"
+description: Performance-focused code review for changed Java, Spring Boot/JPA/Hibernate, JavaScript and React code. It first resolves the review scope deterministically (which files, which rules, what was excluded, coverage ledger via scripts/perf_scope.sh) and asks whether to refresh its PERF rule sets from trusted sources (web or MCP fetch), then runs free static analyzers (PMD, SpotBugs, Semgrep, Biome via scripts; SonarQube and ESLint via MCP servers), applies the per-file contextual rules with a positioning and reflection pass to find N+1 queries, allocation/memory, render and bundle regressions, and blocking main-thread work, and closes a per-file coverage ledger. Use when asked to review a diff/PR/branch for performance risks, run performance linting, or update the PERF rule set.
+argument-hint: "<paths|diff|PR> [--from REF --to REF] [--commit HASH] [--refresh-rules] [--tools pmd,spotbugs,semgrep,sonarqube,biome,eslint] [--deep]"
 metadata:
   prefix: "PERF"
-  version: "2.2"
+  version: "2.3"
 ---
 
 # Performance Skill (PERF) – Code Review Agent
@@ -47,7 +47,10 @@ After the answer, continue with Section 5 (Review Workflow).
 | Generated artifact | `.qakit/context/performance-rules.md` – project-specific validated rule set with stable `PERF-*` IDs. |
 | Rule registry | `references/performance-rule-list.md` – canonical Phase-1 rule families plus dynamically discovered rules. |
 | Source registry | `references/performance-source-registry.md` – trusted sources, URLs, authority level, source sections, and detection tools. |
-| Report folder | `<project>/.perf-reports/<run_id>/` – one output folder per review run (`report.md`, `findings.json`, `meta.json`, tool evidence), created by `scripts/perf_report.sh init`; `.perf-reports/latest` points to the newest run (Step 9). |
+| Path→rule map | `references/perf-path-rules.json` – glob → PERF rule families; used by `perf_scope.sh` for per-file rule matching. |
+| Scope tool | `scripts/perf_scope.sh` – deterministic mode/file selection, exclusions, per-file rule resolution, coverage-ledger skeleton (JSON). |
+| Coverage ledger | `<project>/.perf-reports/<run_id>/coverage.json` – every reviewable file ends `reviewed` or `skipped(reason)`; no `pending` may remain (Step 6.2). |
+| Report folder | `<project>/.perf-reports/<run_id>/` – one output folder per review run (`scope.json`, `coverage.json`, `report.md`, `findings.json`, `meta.json`, tool evidence), created by `scripts/perf_report.sh init`; `.perf-reports/latest` points to the newest run (Step 9). |
 
 ### Core principle
 
@@ -70,7 +73,7 @@ A performance finding is authoritative only when the agent can explain:
 |---|---|---|
 | **Java**: avoidable object allocation, inefficient String/array/collection operations, repeated expensive work, selected blocking or resource-use patterns when a concrete mechanism is identifiable | Pure readability/style, naming, formatting, comments, generic clean-code smells, correctness-only defects | Maintainability · Readability · Security |
 | **Spring Boot / JPA / Hibernate**: N+1 risk, fetch strategy, eager/lazy loading context, query-specific fetch plans, EntityGraph/JOIN FETCH opportunities, batch fetching, JDBC batching, unbounded queries, pagination/count overhead, large offsets, excessive result materialisation, repeated DB round trips | Pure DBA work, index/schema design without supporting code evidence, production tuning, infrastructure sizing, connection-pool tuning as standalone configuration work | Database Operations · SRE / Observability |
-| **React / JavaScript**: unnecessary render work, synchronous state-update chains, component recreation, unstable props defeating memoization, expensive calculations, ineffective/manual memoization, initial JavaScript payload, code splitting/lazy loading, blocking main-thread patterns | Visual correctness, accessibility, generic React conventions, component naming, state-management architecture without a demonstrated performance mechanism | Accessibility · Architecture · Maintainability |
+| **React / JavaScript**: unnecessary render work, synchronous state-update chains, component recreation, unstable props defeating memoization, expensive calculations, ineffective/manual memoization, deferred/transition-based rendering, long-list rendering containment, initial JavaScript payload, code splitting/lazy loading, resource hints and blocking scripts, client-side request deduplication, event-listener hygiene, and language-level JS micro-performance (loops, lookups, caching, DOM batching) | Visual correctness, accessibility, generic React conventions, component naming, state-management architecture without a demonstrated performance mechanism; Next.js/RSC `async-*`/`server-*` patterns | Accessibility · Architecture · Maintainability |
 | **Performance evidence**: benchmark/profile when static evidence is insufficient | CPU %, GC pause, P99 latency, INP, TTFB and similar runtime metrics are **not static violations by themselves** | Performance Testing · Observability |
 
 ### Explicitly excluded from Phase 1
@@ -129,6 +132,11 @@ This file is intentionally separate so the LLM can **refresh, compare, add, depr
 deduplicate rules without rewriting the core skill instructions**. The agent MUST read this file
 before each review, and MAY add new rules to it at runtime under the refresh policy in Section 8.
 
+`references/perf-path-rules.json` maps file globs to rule families so `perf_scope.sh` can attach
+only the relevant rules to each changed file (Step 1/2). It is data, not instruction: extend it to
+teach the skill which families apply to which paths, and keep one rule object per line (the scope
+tool parses it line by line).
+
 ---
 
 ## 4. Severity Guideline
@@ -177,9 +185,33 @@ Follow this order.
 
 Ask the user whether to refresh the rule sets (Section 0). Do not proceed until this is resolved.
 
-### Step 1 — Identify changed code
+### Step 1 — Deterministic scope & per-file rule resolution
 
-Review only files and code paths relevant to the requested change.
+Run the scope tool first. It decides **what** to review and **which** rules apply to each file
+before any LLM reasoning, so a large changeset cannot silently drop files:
+
+```bash
+bash scripts/perf_scope.sh preview "$PROJECT_DIR" [--from REF --to REF] [--commit HASH] \
+     [--exclude 'pat1,pat2'] [--format json]
+```
+
+It prints scope JSON to stdout and `RUN_DIR=<path>` to stderr, and writes `scope.json` +
+`coverage.json` (every reviewable file = `pending`) into the run folder. From the JSON:
+
+- `reviewable_files[].rule_ids` — the exact PERF rules resolved for that file (path → family via
+  `references/perf-path-rules.json`); load only these in Step 2.
+- `excluded_files[]` — deterministic exclusions (build output, vendored, generated, non
+  Java/JS/React, deleted, user patterns); record them under "Excluded (scope)".
+- `mode` / `from` / `to` / `commit` / `merge_base` — the diff basis.
+
+Capture the run folder and reuse it for the rest of this invocation (so there is exactly one
+`run_id`):
+
+```bash
+export PERF_RUN_DIR="<RUN_DIR printed to stderr>"
+```
+
+Then inspect the changed code paths:
 
 For Java/Spring:
 - identify controllers/services/repositories/entities/query methods;
@@ -193,10 +225,13 @@ For React/JS:
 - inspect import graph/dynamic imports for bundle-related findings;
 - inspect event/interaction paths for expensive synchronous work.
 
-### Step 2 — Load rule registry
+### Step 2 — Load the rules resolved for the changed files
 
-Read `references/performance-rule-list.md`. Use selected rules first. Do not invent a rule merely
-because a pattern is unfamiliar.
+Read only the rules `perf_scope.sh` attached to each file (`reviewable_files[].rule_ids`) from
+`references/performance-rule-list.md`. Per-file matching keeps the model's attention on
+file-relevant rule families and removes noise at the source. Fall back to reading the whole
+registry when a file has no resolved rules or scope was not run. Use selected rules first. Do not
+invent a rule merely because a pattern is unfamiliar.
 
 ### Step 3 — Refresh trusted references
 
@@ -222,6 +257,18 @@ For each candidate finding, determine:
 - whether the proposed optimization changes semantics;
 - whether the code is test/benchmark/tooling code where the pattern is intentional.
 
+### Step 5.1 — Positioning pass (per finding)
+
+Every finding must point at a real, exact location. For each candidate:
+
+- resolve `file` + `line` (or `start_line`/`end_line`) against the current file content;
+- if the line cannot be determined, re-read the file and locate the construct from the code symbol
+  rather than guessing — never emit a finding without a location;
+- if a location still cannot be established, mark the finding `positioned: false` and describe the
+  symbol/construct so a human can find it; such a finding is advisory, not merge-blocking.
+
+A finding whose location cannot be tied to changed code is dropped, not reported.
+
 ### Step 6 — Apply rule gates
 
 Reject or downgrade findings that:
@@ -232,6 +279,26 @@ Reject or downgrade findings that:
 - lack sufficient context for a material claim;
 - have a known acceptable exception that applies;
 - would require assumptions not supported by repository evidence.
+
+### Step 6.1 — Reflection pass
+
+Before finalizing, re-check each surviving finding in a separate pass, independent of how it was
+produced:
+
+- is the pattern actually present in the changed code (not in an excluded/generated file)?
+- does the severity match the demonstrated cardinality/frequency/call path?
+- does a documented exception / false-positive apply (see the rule's `false_positive`)?
+- is the reference real (trusted source + locator), not fabricated?
+
+Drop or downgrade findings that fail this pass. Keep confidence separate from severity.
+
+### Step 6.2 — Close the coverage ledger
+
+Update `coverage.json` so that **every** reviewable file from `scope.json` ends as `reviewed` or
+`skipped` with a concrete reason (e.g. `no relevant change`, `budget`, `no scannable code`). No
+file may remain `pending`. Set `reviewed_files`, `skipped_files`, `pending_files` (must be `0`) and
+`coverage_rate = reviewed_files / total_files`. A run with any `pending` file is an **incomplete
+review** and must be reported as such.
 
 ### Step 7 — Produce findings
 
@@ -246,36 +313,42 @@ Only new rules satisfying Section 8 gates may be appended to
 ### Step 9 — Write the per-run report folder (mandatory)
 
 Every finished review MUST end with exactly one output folder for this run, **even when there are
-zero findings**. Use the bundled tool — do not hand-build the structure:
+zero findings**. The folder is normally created in Step 1 by `perf_scope.sh`; if scope was not run,
+create it now. Either way there must be exactly one `run_id` per invocation:
 
 ```bash
-bash scripts/perf_report.sh init "$PROJECT_DIR"   # prints the new run folder path
+bash scripts/perf_report.sh init "$PROJECT_DIR"   # creates (or, with PERF_RUN_DIR set, reuses) the run folder; prints its path
 ```
 
 It creates `<project>/.perf-reports/<run_id>/` with `report.md` (from
-`assets/report-template.md`), scaffold `findings.json`, `meta.json`, and updates the
-`.perf-reports/latest` symlink. The agent then, in this order:
+`assets/report-template.md`), scaffold `findings.json`, `coverage.json`, `meta.json`, and updates
+the `.perf-reports/latest` symlink. The agent then, in this order:
 
-1. **Fills `report.md`** from the review: Verdict, the severity count table, every finding block in
-   template order (priority-ordered), `Excluded (non-PERF)`, the Tool evidence table (one row per
-   script with its real `STATUS`), and Coverage & limitations.
+1. **Fills `report.md`** from the review: Verdict, the severity count table, the Scope row
+   (`{{SCOPE_MODE}}`), the **Coverage ledger** (counts + one row per file), every finding block in
+   template order (priority-ordered), `Excluded (non-PERF)`, `Excluded (scope)`, the Tool evidence
+   table (one row per script with its real `STATUS`), and Coverage & limitations.
 2. **Replaces all remaining `{{...}}` placeholders** (`{{COUNT_CRITICAL}}`, `{{COUNT_HIGH}}`,
    `{{COUNT_MEDIUM}}`, `{{COUNT_LOW}}`, `{{GATE_CHOICE}}` → actual Step 0 choice
-   (`use-existing` / `refresh` / `refresh-deep`), `{{TOOLS_SUMMARY}}`, `{{VERDICT}}`). A report that
-   still contains `{{` after the run is a failed Step 9.
-3. **Writes `findings.json`** with real entries: one object per finding (`rule_id`, `severity`,
+   (`use-existing` / `refresh` / `refresh-deep`), `{{TOOLS_SUMMARY}}`, `{{SCOPE_MODE}}`,
+   `{{TOTAL_FILES}}`, `{{REVIEWED_FILES}}`, `{{SKIPPED_FILES}}`, `{{COVERAGE_RATE}}`,
+   `{{VERDICT}}`). A report that still contains `{{` after the run is a failed Step 9.
+3. **Finalizes `coverage.json`** (Step 6.2): every file `reviewed` or `skipped`, `pending_files: 0`.
+4. **Writes `findings.json`** with real entries: one object per finding (`rule_id`, `severity`,
    `confidence`, `file`, `line`, `title`, `recommendation`, `reference`), `summary` counts matching
-   the report, and `tools` reflecting each script's `STATUS`.
-4. **Closes the chat response** with the line `Report written to: <absolute report.md path>` —
+   the report, `tools` reflecting each script's `STATUS`, and a `coverage` block mirroring
+   `coverage.json`.
+5. **Closes the chat response** with the line `Report written to: <absolute report.md path>` —
    the chat report does not replace the folder.
 
 Rules:
 
-- Zero findings → still init the folder; Verdict uses the Section 10 no-findings wording, empty
-  findings list.
+- Zero findings → still keep the folder; Verdict uses the Section 10 no-findings wording, empty
+  findings list, and the coverage ledger still closes.
 - `.perf-reports/` not writable → init the run folder under the OS temp directory and say so;
   silently skipping the artifact is never an option.
-- Never reuse or overwrite an existing run folder; one `run_id` per invocation.
+- One `run_id` per invocation: reuse the Step 1 folder via `PERF_RUN_DIR`, never create a second
+  folder inside the same review and never overwrite a folder from a previous invocation.
 - Git-tracked project → do not commit the folder; suggest adding `.perf-reports/` to `.gitignore`
   if missing.
 
@@ -359,6 +432,28 @@ A rule must have at least one Tier-1 source unless it is explicitly classified a
 evidence/meta rule. A rule without provenance is a **candidate only** and cannot be promoted to
 the Golden Set.
 
+### Coverage ledger schema
+
+`coverage.json` (written by `perf_scope.sh`, closed by Step 6.2):
+
+```json
+{
+  "total_files": 12,
+  "reviewed_files": 12,
+  "skipped_files": 0,
+  "pending_files": 0,
+  "coverage_rate": 1.0,
+  "files": [
+    { "path": "src/main/java/com/x/FooService.java", "status": "reviewed", "reason": "", "findings": 2 },
+    { "path": "src/main/java/com/x/BarDao.java",      "status": "skipped",  "reason": "no relevant change", "findings": 0 }
+  ]
+}
+```
+
+`status` is one of `reviewed` | `skipped`; `pending` is only the initial state written by
+`perf_scope.sh` and MUST be resolved before the run is complete. `coverage_rate` =
+`reviewed_files / total_files`.
+
 ---
 
 ## 7. Detection Strategy
@@ -367,6 +462,9 @@ The skill uses a hybrid model:
 
 ```text
 Git diff
+   │
+   ▼
+perf_scope.sh   (deterministic: reviewable files + exclusions + per-file rule_ids)
    │
    ├── PMD / SpotBugs / SonarQube   (Java)
    ├── Semgrep / Biome-ESLint       (Java + React/JS)
@@ -388,6 +486,14 @@ Git diff
             ├── Medium-confidence risk
             ├── Advisory
             └── Needs profiling
+
+Positioning pass (exact file:line, or positioned:false)
+            │
+            ▼
+Reflection pass (re-validate before reporting)
+            │
+            ▼
+Coverage ledger closed (every file reviewed | skipped(reason))
 ```
 
 ### 7.1 Detection precedence
@@ -661,6 +767,8 @@ It MUST NOT be represented as "100% coverage of all performance issues".
 
 ## 12. Execution Modes
 
+- **All modes** start with `perf_scope.sh` (deterministic scope + per-file rules), run the
+  positioning/reflection passes, and end with a closed coverage ledger (no `pending` files).
 - **Standard review** (default) — existing selected rules; refresh only when needed.
 - **Deep review** (`--deep`) — refresh all relevant core sources, run all available static tools, perform contextual LLM analysis, update the rule registry.
 - **New-rule discovery** (explicitly asked to improve the skill) — `fetch → synthesize → deduplicate → validate → Golden Set → append registry`. Prefer new rule families with strong source evidence over superficial variations.

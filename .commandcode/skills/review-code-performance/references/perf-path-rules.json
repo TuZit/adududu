@@ -1,0 +1,24 @@
+{
+  "$comment": "Deterministic path -> PERF rule-family mapping used by scripts/perf_scope.sh. IMPORTANT: one rule object per line (line-based parser). 'groups' are PERF rule family prefixes (without trailing dash); perf_scope.sh expands each prefix against performance-rule-list.md. Optional 'when': 'spring' applies the group only when the project looks like Spring/JPA.",
+  "version": 1,
+  "defaults": {
+    "always": ["PERF-EVIDENCE"]
+  },
+  "rules": [
+    {"path": "**/*.java", "groups": ["PERF-JAVA"], "when": "any"},
+    {"path": "**/*.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/repository/**", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/dao/**", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/entity/**", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Repository.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Dao.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Entity.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Mapper.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Service.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*Controller.java", "groups": ["PERF-SPRING"], "when": "spring"},
+    {"path": "**/*.js", "groups": ["PERF-REACT", "PERF-FE", "PERF-JS"], "when": "any"},
+    {"path": "**/*.jsx", "groups": ["PERF-REACT", "PERF-FE", "PERF-JS"], "when": "any"},
+    {"path": "**/*.ts", "groups": ["PERF-REACT", "PERF-FE", "PERF-JS"], "when": "any"},
+    {"path": "**/*.tsx", "groups": ["PERF-REACT", "PERF-FE", "PERF-JS"], "when": "any"}
+  ]
+}
